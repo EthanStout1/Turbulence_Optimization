@@ -13,6 +13,9 @@ from ufl import (
     Identity,
     derivative,
     sqrt,
+    FacetNormal,
+    ds,
+    Measure,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -51,18 +54,20 @@ vel_in = vel_i  # Inlet Velocity
 press_out = 0.0  # Outlet Pressure
 
 ################# Read in Mesh
-with XDMFFile(MPI.COMM_WORLD, "Channel_mesh_fine.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "meshes/Channel_mesh_fine.xdmf", "r") as xdmf:
     mesh = xdmf.read_mesh(name="Grid")
     cd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 
-with XDMFFile(MPI.COMM_WORLD, "Channel_mesh_fine_facet.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "meshes/Channel_mesh_fine_facet.xdmf", "r") as xdmf:
     fd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
 tdim = mesh.topology.dim
 fdim = tdim - 1
 
+
+ds = Measure("ds", domain=mesh, subdomain_data=fd)
 
 ################# Define Finite Elements
 U_el = element(
@@ -120,10 +125,10 @@ def noslip(x):
     return np.stack((np.zeros(x.shape[1]), np.zeros(x.shape[1])))
 
 
-ID_Wall_1 = 3
-ID_Wall_2 = 4
 ID_In = 1
 ID_Out = 2
+ID_Wall_1 = 3
+ID_Wall_2 = 4
 
 # Locate DOFs
 wall_1_dofs = locate_dofs_topological((W.sub(0), V_sub), fdim, fd.find(ID_Wall_1))
@@ -146,14 +151,15 @@ u_in.interpolate(inflow)
 bc_inlet = dirichletbc(u_in, in_dofs, W.sub(0))
 # bc_inlet_p = dirichletbc(PETSc.ScalarType(1000.0001), in_dofs_p, W.sub(1))
 
-bc_out_v = Function(V_sub)
-bc_out_v.interpolate(inflow)
-bc_outlet_v = dirichletbc(bc_out_v, out_dofs_v, W.sub(0))
+# bc_out_v = Function(V_sub)
+# bc_out_v.interpolate(inflow)
+# bc_outlet_v = dirichletbc(bc_out_v, out_dofs_v, W.sub(0))
 
 bc_outlet = dirichletbc(PETSc.ScalarType(press_out), out_dofs_p, W.sub(1))
 
 # Collect BCs
-BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet, bc_outlet_v]
+# BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet, bc_outlet_v]
+BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet]
 
 
 ################ Weak Formulation Constants
@@ -161,6 +167,7 @@ iden = Identity(2)  # Identity Matrix
 n_u = Constant(mesh, default_scalar_type(kvisc))
 rho = Constant(mesh, default_scalar_type(dens))
 cons = Constant(mesh, default_scalar_type(6.0 / 11.0 * dt))  # BDF3 hf coefficient
+n = FacetNormal(mesh)
 
 
 ################ Weak/Variational Form of IC NS
@@ -188,11 +195,27 @@ L_4 = (
     * inner(nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden, nabla_grad(v))
     * dx
 )  # Diffusive Term
+
+
+L_neumm = (
+    -cons
+    * dot(
+        dot(
+            n_u * (nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden)
+            - (1.0 / rho) * p * iden,
+            n,
+        ),
+        v,
+    )
+    * ds(2)
+)
+
 # L_4=cons*n_u*inner(nabla_grad(u),nabla_grad(v))*dx\ # Diffusive term with divergence-free constraint directly applied
 
 
 # L=L_1+L_2+L_3+L_4 # Unsteady sim
-L = L_2 + L_3 + L_4  # Steady-state sim
+# L = L_2 + L_3 + L_4  # Steady-state sim
+L = L_2 + L_3 + L_4 + L_neumm  # Steady-state sim
 
 
 ################ Set Solver Definition
@@ -247,7 +270,7 @@ while t_i < Time:
 
     ########### Print out values
     if count % 5 == 0 or count < 4:
-        folder = Path("./")
+        folder = Path("./tmp")
         folder.mkdir(exist_ok=True, parents=True)
         vtx_u = VTXWriter(
             mesh.comm,
