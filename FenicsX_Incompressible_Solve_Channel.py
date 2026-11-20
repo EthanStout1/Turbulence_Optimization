@@ -14,7 +14,6 @@ from ufl import (
     derivative,
     sqrt,
     FacetNormal,
-    ds,
     Measure,
 )
 from basix.ufl import element, mixed_element
@@ -40,18 +39,18 @@ from pathlib import Path
 ################# Set Key Solver Parameters
 tol = 1e-7  # Tolerance
 K = 1  # Polynomial Degree
-dt = 0.1  # Time Step
-Time = 30.0  # Simulation time
-count = 1  # Time loop counter
 
 
 ################# Set Key Solver Parameters
-dvisc = 0.004  # Dynamic Viscosity
-dens = 1060.0  # Density
-kvisc = dvisc / dens  # Kinematic Viscosity
-vel_i = 0.0005  # Initial Velocity (set equal to velocity over the domain)
-vel_in = vel_i  # Inlet Velocity
-press_out = 0.0  # Outlet Pressure
+Re = 100  # Reynolds Number
+c_ref = 1.0  # Reference length scale
+# dvisc = 0.004  # Dynamic Viscosity
+rho_ref = 1.0  # Reference Density
+vel_ref = 1.0  # Reference Velocity
+nu_ref = rho_ref * vel_ref * c_ref / Re  # Reference kinematic viscosity
+vel_i = vel_ref  # Initial Velocity (set equal to velocity over the domain)
+vel_in = vel_ref  # Inlet Velocity
+p_out = 0.0  # Outlet Pressure (arbitrary choice)
 
 ################# Read in Mesh
 with XDMFFile(MPI.COMM_WORLD, "meshes/Channel_mesh_fine.xdmf", "r") as xdmf:
@@ -69,11 +68,11 @@ fdim = tdim - 1
 
 ds = Measure("ds", domain=mesh, subdomain_data=fd)
 
-################# Define Finite Elements
+################# Define Finite Element Spaces
 U_el = element(
-    "CG", mesh.basix_cell(), K + 1, shape=(mesh.geometry.dim,)
+    "Lagrange", mesh.basix_cell(), K + 1, shape=(mesh.geometry.dim,)
 )  # Velocity Element
-P_el = element("CG", mesh.basix_cell(), K)  # Pressure Element
+P_el = element("Lagrange", mesh.basix_cell(), K)  # Pressure Element
 
 
 ################# Define Function Spaces (For initial Conditions)
@@ -90,30 +89,8 @@ vq = TestFunction(W)
 v, q = split(vq)
 
 
-################# Define Function Spaces for Runge-Kutta Terms
+################# Define Function Spaces
 V_sub, _ = W.sub(0).collapse()
-u_1 = Function(V_sub)
-u_2 = Function(V_sub)
-u_3 = Function(V_sub)
-
-################ Set up Initial Conditions using initial value for each RK Term
-for i, vel in enumerate([vel_i, 0.0]):
-    u_1.sub(i).interpolate(
-        lambda x, vel_in=vel: np.full(x.shape[1], vel_in, dtype=np.float64)
-    )
-    u_2.sub(i).interpolate(
-        lambda x, vel_in=vel: np.full(x.shape[1], vel_in, dtype=np.float64)
-    )
-    u_3.sub(i).interpolate(
-        lambda x, vel_in=vel: np.full(x.shape[1], vel_in, dtype=np.float64)
-    )
-
-
-#### Check if Velocity was assigned properly
-folder = Path("../scratch")
-folder.mkdir(exist_ok=True, parents=True)
-vtx_u = VTXWriter(mesh.comm, folder / "Vel_check.bp", [u_3], engine="BP4")
-vtx_u.write(0.0)
 
 
 ################ Define Boundary Conditions
@@ -155,7 +132,7 @@ bc_inlet = dirichletbc(u_in, in_dofs, W.sub(0))
 # bc_out_v.interpolate(inflow)
 # bc_outlet_v = dirichletbc(bc_out_v, out_dofs_v, W.sub(0))
 
-bc_outlet = dirichletbc(PETSc.ScalarType(press_out), out_dofs_p, W.sub(1))
+bc_outlet = dirichletbc(PETSc.ScalarType(p_out), out_dofs_p, W.sub(1))
 
 # Collect BCs
 # BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet, bc_outlet_v]
@@ -164,58 +141,40 @@ BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet]
 
 ################ Weak Formulation Constants
 iden = Identity(2)  # Identity Matrix
-n_u = Constant(mesh, default_scalar_type(kvisc))
-rho = Constant(mesh, default_scalar_type(dens))
-cons = Constant(mesh, default_scalar_type(6.0 / 11.0 * dt))  # BDF3 hf coefficient
+nu = Constant(mesh, default_scalar_type(nu_ref))
+rho = Constant(mesh, default_scalar_type(rho_ref))
 n = FacetNormal(mesh)
 
 
 ################ Weak/Variational Form of IC NS
-# Assume elements are at least C0 continuous on element boundaries
-# Assume Pressure Dirichlet BCs are assigned on the boundary of the global domain
 
-L_1 = (
-    dot(u, v) * dx
-    - 18.0 / 11.0 * dot(u_3, v) * dx
-    + 9.0 / 11.0 * dot(u_2, v) * dx
-    - 2.0 / 11.0 * dot(u_1, v) * dx
-)  # u_dot term
+L_1 = div(u) * q * dx  # Continuity eqn (scaled for symmetry)
 
-L_2 = -cons * (1 / rho) * div(u) * q * dx  # Continuity eqn (scaled for symmetry)
-
-L_3 = (
-    cons * dot(dot(u, nabla_grad(u)), v) * dx
-    + cons * 1 / 2 * dot(div(u) * u, v) * dx
-    - cons * (1 / rho) * p * div(v) * dx
+L_2 = (
+    dot(dot(u, nabla_grad(u)), v) * dx
+    + 1.0 / 2.0 * dot(div(u) * u, v) * dx
+    - (1.0 / rho) * p * div(v) * dx
 )  # 2 Convective Skew-Symmetric terms and Pressure Term
 
-L_4 = (
-    cons
-    * n_u
-    * inner(nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden, nabla_grad(v))
+L_3 = (
+    nu
+    * inner(nabla_grad(u) + nabla_grad(u).T - 2.0 / 3.0 * div(u) * iden, nabla_grad(v))
     * dx
 )  # Diffusive Term
 
 
-L_neumm = (
-    -cons
-    * dot(
-        dot(
-            n_u * (nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden)
-            - (1.0 / rho) * p * iden,
-            n,
-        ),
-        v,
-    )
-    * ds(2)
-)
-
-# L_4=cons*n_u*inner(nabla_grad(u),nabla_grad(v))*dx\ # Diffusive term with divergence-free constraint directly applied
+L_neumm = -dot(
+    dot(
+        nu * (nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden)
+        - (1.0 / rho) * p * iden,
+        n,
+    ),
+    v,
+) * ds(2)
 
 
-# L=L_1+L_2+L_3+L_4 # Unsteady sim
-# L = L_2 + L_3 + L_4  # Steady-state sim
-L = L_2 + L_3 + L_4 + L_neumm  # Steady-state sim
+# L = L_1 + L_2 + L_3 + L_neumm  # Steady-state sim
+L = L_1 + L_2 + L_3  # Steady-state sim
 
 
 ################ Set Solver Definition
@@ -252,41 +211,31 @@ log.set_log_level(log.LogLevel.INFO)
 
 
 ################ Time Loop
-t_i = 2 * dt
-while t_i < Time:
-    t_i += dt
-    print(t_i)
+n, converged = solver.solve(up)
+assert converged
+print(f"Number of iterations: {n:d}")
 
-    n, converged = solver.solve(up)
-    assert converged
-    print(f"Number of iterations: {n:d}")
+u_, p_ = (up.split()[0].collapse(), up.split()[1].collapse())
 
-    u_, p_ = (up.split()[0].collapse(), up.split()[1].collapse())
 
-    ########## Update stored values
-    u_1.x.array[:] = u_2.x.array[:]
-    u_2.x.array[:] = u_3.x.array[:]
-    u_3.x.array[:] = u_.x.array[:]
+########### Print out values
+folder = Path("./tmp")
+folder.mkdir(exist_ok=True, parents=True)
+vtx_u = VTXWriter(
+    mesh.comm,
+    folder / ("Velocity" + "_.bp"),
+    [u_],
+    engine="BP4",
+)
+vtx_p = VTXWriter(
+    mesh.comm,
+    folder / ("Pressure" + "_.bp"),
+    [p_],
+    engine="BP4",
+)
 
-    ########### Print out values
-    if count % 5 == 0 or count < 4:
-        folder = Path("./tmp")
-        folder.mkdir(exist_ok=True, parents=True)
-        vtx_u = VTXWriter(
-            mesh.comm,
-            folder / ("Velocity_" + "Time_" + str(t_i) + "_.bp"),
-            [u_3],
-            engine="BP4",
-        )
-        vtx_p = VTXWriter(
-            mesh.comm,
-            folder / ("Pressure_" + "Time_" + str(t_i) + "_.bp"),
-            [p_],
-            engine="BP4",
-        )
-        vtx_p.write(t_i)
-        vtx_u.write(t_i)
+vtx_u.write(0.0)
+vtx_p.write(0.0)
 
-    count += 1
 
 quit()
