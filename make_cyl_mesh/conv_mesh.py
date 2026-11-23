@@ -22,11 +22,11 @@ def create_mesh(mesh, cell_type, prune_z=False):
 
 # if proc == 0:
 # Read in mesh
-msh = meshio.read("cyl.msh")
+msh = meshio.read("cyl_fine.msh")
 
 # Create and save one file for the mesh, and one file for the facets
 triangle_mesh = create_mesh(msh, "triangle", prune_z=True)
 line_mesh = create_mesh(msh, "line", prune_z=True)
-meshio.write("Cyl.xdmf", triangle_mesh)
-meshio.write("Cyl_facets.xdmf", line_mesh)
+meshio.write("Cyl_fine.xdmf", triangle_mesh)
+meshio.write("Cyl_fine_facets.xdmf", line_mesh)
 MPI.COMM_WORLD.barrier()

@@ -53,12 +53,12 @@ vel_in = vel_ref  # Inlet Velocity
 p_out = 0.0  # Outlet Pressure (arbitrary choice)
 
 ################# Read in Mesh
-with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_fine.xdmf", "r") as xdmf:
     mesh = xdmf.read_mesh(name="Grid")
     cd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 
-with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_facets.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_fine_facets.xdmf", "r") as xdmf:
     fd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
@@ -163,14 +163,14 @@ L_3 = (
 )  # Diffusive Term
 
 
-L_neumm = -dot(
-    dot(
-        nu * (nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden)
-        - (1.0 / rho) * p * iden,
-        n,
-    ),
-    v,
-) * ds(9)
+# L_neumm = -dot(
+#    dot(
+#        nu * (nabla_grad(u) + nabla_grad(u).T - 2 / 3 * div(u) * iden)
+#        - (1.0 / rho) * p * iden,
+#        n,
+#    ),
+#    v,
+# ) * ds(9)
 
 
 # L = L_1 + L_2 + L_3 + L_neummm  # Steady-state sim

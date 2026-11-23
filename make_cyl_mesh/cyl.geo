@@ -3,7 +3,7 @@ SetFactory("OpenCASCADE");
 Circle(1) = {-0, 0, 0, 0.5, 0, 2*Pi};
 
 // Far-Field
-lc_e = 10;
+lc_e = 1;
 Point(2) = {-50, -50, 0.0, lc_e};
 Point(3) = {50, -50, 0.0, lc_e};
 Point(4) = {50, 50, 0.0, lc_e};
