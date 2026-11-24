@@ -45,9 +45,8 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 200  # Reynolds Number
+Re = 100  # Reynolds Number
 c_ref = 1.0  # Reference length scale
-# dvisc = 0.004  # Dynamic Viscosity
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
 nu_ref = vel_ref * c_ref / Re  # Reference kinematic viscosity
