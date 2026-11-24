@@ -34,7 +34,7 @@ from dolfinx.fem import (
 from dolfinx.fem.petsc import LinearProblem
 
 # from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.fem.petsc import NewtonSolverNonlinearProblem as NonlinearProblem
+from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.nls.petsc import NewtonSolver
 from dolfinx.io import XDMFFile, VTXWriter
 from mpi4py import MPI
@@ -47,7 +47,7 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 100  # Reynolds Number
+Re = 200  # Reynolds Number
 c_ref = 1.0  # Reference length scale
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
@@ -147,13 +147,21 @@ V_sub, _ = W.sub(0).collapse()
 
 
 ################ Define Primitive Boundary Conditions
+# def inflow(x):
+#    return np.stack((np.full(x.shape[1], vel_in), np.zeros(x.shape[1])))
+
+
 def inflow(x):
-    return np.stack((np.full(x.shape[1], vel_in), np.zeros(x.shape[1])))
+    eta = (x[1] - 0) / (1)
+    ux = 6.0 * vel_in * eta * (1.0 - eta)
+    return np.stack((ux, np.zeros_like(ux)))
 
 
 def noslip(x):
     return np.stack((np.zeros(x.shape[1]), np.zeros(x.shape[1])))
 
+
+nu_t_in = Constant(mesh, default_scalar_type(3 * nu_ref))  # Wrap as a constant
 
 # Locate DOFs
 in_dofs_v = locate_dofs_topological((W.sub(0), V_sub), fdim, fd.find(ID_In))
@@ -170,11 +178,11 @@ wall_dofs_nu = locate_dofs_topological((W.sub(2)), fdim, fd.find(ID_Wall))
 u_in = Function(V_sub)
 u_in.interpolate(inflow)
 bc_inlet = dirichletbc(u_in, in_dofs_v, W.sub(0))
-bc_inlet_nu = dirichletbc(PETSc.ScalarType(nu_t_ff), in_dofs_nu, W.sub(2))
+bc_inlet_nu = dirichletbc(nu_t_in, in_dofs_nu, W.sub(2))
 
 
-bc_outlet = dirichletbc(PETSc.ScalarType(p_out), out_dofs_p, W.sub(1))
-bc_outlet_nu = dirichletbc(PETSc.ScalarType(nu_t_ff), out_dofs_nu, W.sub(2))
+# bc_outlet = dirichletbc(PETSc.ScalarType(p_out), out_dofs_p, W.sub(1))
+# bc_outlet_nu = dirichletbc(PETSc.ScalarType(nu_t_ff), out_dofs_nu, W.sub(2))
 
 u_wall = Function(V_sub)
 u_wall.interpolate(noslip)
@@ -183,17 +191,6 @@ bc_wall_nu = dirichletbc(PETSc.ScalarType(nu_t_wall), wall_dofs_nu, W.sub(2))
 
 
 # Collect BCs
-# BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet, bc_outlet_v]
-# BCs_main = [
-#    bc_top_bot,
-#    bc_inlet,
-#    bc_wall,
-#    bc_top_bot_nu,
-#    bc_inlet_nu,
-#    bc_outlet_nu,
-#    bc_wall_nu,
-# ]
-
 BCs_main = [
     bc_inlet,
     bc_wall,
@@ -224,13 +221,9 @@ ct4 = 0.5
 cw1 = (cb1 / (kappa * kappa)) + (1 + cb2) / sigma
 
 # Turbulent eddy viscosity
-X = nt / nu_ref
+X = nt / nu
 fv1 = (X * X * X) / (X * X * X + cv1 * cv1 * cv1)
 nu_turb = nt * fv1
-
-# Wall distance equation (circle centered at (0,0) )
-# circ_r = 0.5  # Radius of the circle
-# d = sqrt(x[0] * x[0] + x[1] * x[1]) - circ_r
 
 # Vorticity magnitude
 Wij = 0.5 * (grad(u) - grad(u).T)
@@ -281,43 +274,42 @@ L = L_1 + L_2 + L_3 + L_SA  # Steady-state sim
 
 
 ################ Set Solver Definition
-Jac = derivative(L, up, du)
-problem = NonlinearProblem(L, up, bcs=BCs_main, J=Jac)
-solver = NewtonSolver(MPI.COMM_WORLD, problem)
+petsc_options = {
+    "snes_type": "newtonls",
+    # "snes_linesearch_type": "secant",
+    "snes_linesearch_type": "bt",
+    "snes_linesearch_alpha": 1e-8,
+    "snes_linesearch_order": 1,
+    "snes_atol": tol,
+    "snes_rtol": tol,
+    "snes_monitor": None,
+    "snes_max_it": 100,
+    "ksp_error_if_not_converged": True,
+    "ksp_type": "preonly",
+    "pc_type": "lu",
+    "pc_factor_mat_solver_type": "mumps",
+}
 
-solver.convergence_criterion = "incremental"
-solver.rtol = tol
-solver.atol = tol
-solver.report = True
-# solver.max_it = 200
+problem_RANS = NonlinearProblem(
+    L,
+    up,
+    bcs=BCs_main,
+    petsc_options=petsc_options,
+    petsc_options_prefix="RANS_Solve",
+)
 
-ksp = solver.krylov_solver
-opts = PETSc.Options()
-option_prefix = ksp.getOptionsPrefix()
+problem_RANS.solve()
+converged = problem_RANS.solver.getConvergedReason()
+num_iter = problem_RANS.solver.getIterationNumber()
+assert converged > 0, f"Solver did not converge, got {converged}."
+print(
+    f"Solver converged after {num_iter} iterations with converged reason {converged}."
+)
 
-# Direct Solver
-opts[f"{option_prefix}ksp_type"] = "preonly"  # Specify no iterative method
-opts[f"{option_prefix}pc_type"] = "lu"  # or qr/chovlesky
-opts[f"{option_prefix}pc_factor_mat_solver_type"] = "mumps"
-
-# Krylov Subspace Method
-# opts[f"{option_prefix}ksp_type"] = "cgls"
-# opts[f"{option_prefix}ksp_gmres_modifiedgramschmidt"] = "true"
-# opts[f"{option_prefix}pc_type"] = "none"
-# opts[f"{option_prefix}ksp_initial_guess_nonzero"] = "false"
-# opts[f"{option_prefix}hypre_type"] = "boomeramg
-# opts["pc_hypre_boomeramg_max_iter"] =
-# opts["pc_hypre_boomeramg_cycle_type"] = "v"
-
-ksp.setFromOptions()
-log.set_log_level(log.LogLevel.INFO)
+# log.set_log_level(log.LogLevel.INFO)
 
 
 ################ Time Loop
-n, converged = solver.solve(up)
-assert converged
-print(f"Number of iterations: {n:d}")
-
 u_, p_, nt_ = (
     up.split()[0].collapse(),
     up.split()[1].collapse(),

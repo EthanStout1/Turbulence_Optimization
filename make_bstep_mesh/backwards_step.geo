@@ -5,7 +5,7 @@ H = 1.0; // Step height
 
 
 // Backwards Step Points
-lc_e = 0.1;
+lc_e = 0.03;
 Point(1) = {0.0, 0.0, 0.0, lc_e};
 Point(2) = {Ls, 0.0, 0.0, lc_e};
 Point(3) = {Ls, -H, 0.0, lc_e};
@@ -29,8 +29,8 @@ Mesh 2;
 //+
 Physical Surface("Domain", 7) = {1};
 //+
-Physical Curve("Inflow", 8) = {6};
+Physical Curve("Inlet", 8) = {6};
 //+
-Physical Curve("Outflow", 9) = {4};
+Physical Curve("Outlet", 9) = {4};
 //+
-Physical Curve("Walls", 10) = {5, 1, 2, 3};
+Physical Curve("Wall", 10) = {5, 1, 3, 2};
