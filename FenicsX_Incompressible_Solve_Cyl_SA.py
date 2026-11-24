@@ -5,7 +5,6 @@ from ufl import (
     TrialFunction,
     div,
     dot,
-    dx,
     grad,
     nabla_grad,
     inner,
@@ -13,8 +12,12 @@ from ufl import (
     Identity,
     derivative,
     sqrt,
+    exp,
+    min_value,
+    max_value,
     FacetNormal,
     Measure,
+    SpatialCoordinate,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -42,12 +45,12 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 20  # Reynolds Number
+Re = 200  # Reynolds Number
 c_ref = 1.0  # Reference length scale
 # dvisc = 0.004  # Dynamic Viscosity
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
-nu_ref = rho_ref * vel_ref * c_ref / Re  # Reference kinematic viscosity
+nu_ref = vel_ref * c_ref / Re  # Reference kinematic viscosity
 vel_i = vel_ref  # Initial Velocity (set equal to velocity over the domain)
 vel_in = vel_ref  # Inlet Velocity
 p_out = 0.0  # Outlet Pressure (arbitrary choice)
@@ -55,12 +58,12 @@ nu_t_wall = 0.0  # Wall eddy viscosity
 nu_t_ff = 3 * nu_ref  # Wall eddy viscosity in the farfield
 
 ################# Read in Mesh
-with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_fine.xdmf", "r") as xdmf:
     mesh = xdmf.read_mesh(name="Grid")
     cd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 
-with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_facets.xdmf", "r") as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "make_cyl_mesh/Cyl_fine_facets.xdmf", "r") as xdmf:
     fd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
@@ -68,7 +71,10 @@ tdim = mesh.topology.dim
 fdim = tdim - 1
 
 
-ds = Measure("ds", domain=mesh, subdomain_data=fd)
+ds = Measure("ds", domain=mesh, subdomain_data=fd, metadata={"quadrature_degree": 6})
+dx = Measure("dx", domain=mesh, metadata={"quadrature_degree": 6})
+
+x = SpatialCoordinate(mesh)
 
 ################# Define Finite Element Spaces
 U_el = element(
@@ -147,13 +153,22 @@ bc_wall_nu = dirichletbc(PETSc.ScalarType(nu_t_wall), wall_dofs_nu, W.sub(2))
 
 # Collect BCs
 # BCs = [bc_wall_1, bc_wall_2, bc_inlet, bc_outlet, bc_outlet_v]
+# BCs_main = [
+#    bc_top_bot,
+#    bc_inlet,
+#    bc_wall,
+#    bc_top_bot_nu,
+#    bc_inlet_nu,
+#    bc_outlet_nu,
+#    bc_wall_nu,
+# ]
+
 BCs_main = [
     bc_top_bot,
     bc_inlet,
     bc_wall,
     bc_top_bot_nu,
     bc_inlet_nu,
-    bc_outlet_nu,
     bc_wall_nu,
 ]
 
@@ -164,7 +179,10 @@ nu = Constant(mesh, default_scalar_type(nu_ref))
 rho = Constant(mesh, default_scalar_type(rho_ref))
 n = FacetNormal(mesh)
 
-################ SA Constants
+################ SA Variables
+
+
+# SA parameter constants
 cb1 = 0.1355
 sigma = 2.0 / 3.0
 cb2 = 0.622
@@ -176,10 +194,40 @@ ct3 = 1.2
 ct4 = 0.5
 cw1 = (cb1 / (kappa * kappa)) + (1 + cb2) / sigma
 
+# Turbulent eddy viscosity
+X = nt / nu_ref
+fv1 = (X * X * X) / (X * X * X + cv1 * cv1 * cv1)
+nu_turb = nt * fv1
+
+# Wall distance equation (circle centered at (0,0) )
+circ_r = 0.5  # Radius of the circle
+d = sqrt(x[0] * x[0] + x[1] * x[1]) - circ_r
+
+# Vorticity magnitude
+Wij = 0.5 * (grad(u) - grad(u).T)
+Omega = abs(u[1].dx(0) - u[0].dx(1))
+
+# Other relevant terms
+ft2 = ct3 * exp(-ct4 * X * X)
+fv2 = 1 - (X / (1 + X * fv1))
+S_tilda = max_value(Omega + (nt / (kappa * kappa * d * d)) * fv2, 0.3 * Omega)
+S_safe = max_value(S_tilda, 1e-12)  # Prevent div by 0
+r = min_value((nt / (S_safe * kappa * kappa * d * d)), 10)
+g = r + cw2 * ((r**6) - r)
+fw = g * ((1 + cw3**6) / (g**6 + cw3**6)) ** (1 / 6)
+
 
 ################ SA Term
 
-L_SA = 
+L_SA_1 = dot(u, grad(nt)) * z * dx  # Advection
+L_SA_2 = -cb1 * (1 - ft2) * S_tilda * nt * z * dx  # Production
+L_SA_3 = (
+    (cw1 * fw - (cb1 / (kappa * kappa)) * ft2) * (nt / d) * (nt / d) * z * dx
+)  # Destruction
+L_SA_4 = (1 / sigma) * inner((nu + nt) * grad(nt), grad(z)) * dx
+L_SA_5 = -(1 / sigma) * (cb2 * inner(grad(nt), grad(nt))) * z * dx
+
+L_SA = L_SA_1 + L_SA_2 + L_SA_3 + L_SA_4 + L_SA_5
 
 
 ################ Weak/Variational Form of IC NS
@@ -193,14 +241,14 @@ L_2 = (
 )  # 2 Convective Skew-Symmetric terms and Pressure Term
 
 L_3 = (
-    (nu)
+    (nu + nu_turb)
     * inner(nabla_grad(u) + nabla_grad(u).T - 2.0 / 3.0 * div(u) * iden, nabla_grad(v))
     * dx
 )  # Diffusive Term
 
 
 # L = L_1 + L_2 + L_3 + L_neummm  # Steady-state sim
-L = L_1 + L_2 + L_3  # Steady-state sim
+L = L_1 + L_2 + L_3 + L_SA  # Steady-state sim
 
 
 ################ Set Solver Definition
@@ -241,7 +289,11 @@ n, converged = solver.solve(up)
 assert converged
 print(f"Number of iterations: {n:d}")
 
-u_, p_ = (up.split()[0].collapse(), up.split()[1].collapse())
+u_, p_, nt_ = (
+    up.split()[0].collapse(),
+    up.split()[1].collapse(),
+    up.split()[2].collapse(),
+)
 
 
 ########### Print out values
@@ -260,8 +312,16 @@ vtx_p = VTXWriter(
     engine="BP4",
 )
 
+vtx_nu = VTXWriter(
+    mesh.comm,
+    folder / ("Working_Viscosity" + "_.bp"),
+    [nt_],
+    engine="BP4",
+)
+
 vtx_u.write(0.0)
 vtx_p.write(0.0)
+vtx_nu.write(0.0)
 
 
 quit()
