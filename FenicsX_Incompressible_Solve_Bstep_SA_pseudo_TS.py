@@ -33,12 +33,15 @@ from dolfinx.fem import (
 
 from dolfinx.fem.petsc import LinearProblem
 
-# from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.nls.petsc import NewtonSolver
 from dolfinx.io import XDMFFile, VTXWriter
 from mpi4py import MPI
 from pathlib import Path
+
+################# MPI
+comm = MPI.COMM_WORLD
+rank = MPI.COMM_WORLD.Get_rank()
 
 
 ################# Set Key Solver Parameters
@@ -47,14 +50,14 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 5000  # Reynolds Number
+Re = 15000  # Reynolds Number
 c_ref = 1.0  # Reference length scale
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
 nu_ref = vel_ref * c_ref / Re  # Reference kinematic viscosity
 vel_i = vel_ref  # Initial Velocity (set equal to velocity over the domain)
 vel_in = vel_ref  # Inlet Velocity
-p_out = 0.0  # Outlet Pressure (arbitrary choice)
+# p_out = 0.0  # Outlet Pressure (arbitrary choice)
 nu_t_wall = 0.0  # Wall eddy viscosity
 nu_t_ff = 3 * nu_ref  # Wall eddy viscosity in the farfield
 
@@ -62,14 +65,14 @@ nu_t_ff = 3 * nu_ref  # Wall eddy viscosity in the farfield
 dt0 = 1e-3  # Initial time step
 dt_min = 1e-7  # Minimum dt to tolerate before killing the sim
 dt_max = 1e20  # Max time step
-dt_min_exit = 1e6  # Minimum dt to hit before you can exit time loop
+dt_min_exit = 1e4  # Minimum dt to hit before you can exit time loop
 dt_increase_fac = 2.0  # How much to increase time step if going well
 dt_decrease_fac = 5.0  # How much to decrease time step if failed to converge
 max_ts = 150  # Maximum number of time steps
-tol_exit = 1e-5  # Exit pseudo-time stepping if relative decrease is less than this
+tol_exit = 1e-3  # Exit pseudo-time stepping if relative decrease is less than this
 
 ################# Newton method parameters
-max_newt = 20  # Maximum number of Newton iterations
+max_newt = 20  # Maximum number of Newton iterations per time step
 ls_order = 3  # Line search order
 mu_1 = 1e-4  # Backtracking line search fac
 
@@ -340,10 +343,13 @@ problem_RANS_unsteady = NonlinearProblem(
 )
 
 # Loop over time until solution stops changing
-print("Starting pseudo time-stepping")
+ts_diff = Function(W)
+if rank == 0:
+    print("Starting pseudo time-stepping")
 up_1 = up.x.array.copy()
 for i in range(max_ts):
-    print("Starting time step:", i)
+    if rank == 0:
+        print("Starting time step:", i)
     # Solve unsteady problem
     problem_RANS_unsteady.solve()
     converged = problem_RANS_unsteady.solver.getConvergedReason()
@@ -351,8 +357,10 @@ for i in range(max_ts):
     # Check if converged
     if converged > 0:
         # Check the relative change between iterations
-        delta = np.linalg.norm(up.x.array - up_1) / np.linalg.norm(up.x.array)
-        print("The relative change is:", delta)
+        ts_diff.x.array[:] = up.x.array - up_1
+        delta = la.norm(ts_diff.x) / la.norm(up.x)
+        if rank == 0:
+            print("The relative change is:", delta)
 
         # Proceed to steady solve if below tolerance
         if (delta < tol_exit) and (dt.value > dt_min_exit):
@@ -360,7 +368,8 @@ for i in range(max_ts):
         # Otherwise, increase dt and move to the next time step
         else:
             dt.value = min(dt.value * dt_increase_fac, dt_max)
-            print("Newton solver converged, increasing time step to dt=", dt.value)
+            if rank == 0:
+                print("Newton solver converged, increasing time step to dt=", dt.value)
 
             up_1 = up.x.array.copy()
 
@@ -373,7 +382,8 @@ for i in range(max_ts):
     # Failed to converge, decrease time step
     else:
         dt.value /= dt_decrease_fac
-        print("Newton solver failed to converge, decreasing time step to", dt.value)
+        if rank == 0:
+            print("Newton solver failed to converge, decreasing time step to", dt.value)
 
         assert dt.value > dt_min, f"dt dropped below the minimum value, exiting"
 
