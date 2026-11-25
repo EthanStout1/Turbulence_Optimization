@@ -480,17 +480,17 @@ u_, p_, nt_ = (
 
 ################ Compute wall shear stress
 dWall_bot = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_bot)
+
+dWall_other = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_other)
 n = FacetNormal(mesh)
 
 t = as_vector((n[1], -n[0]))
 dutdn = dot(dot(grad(u_), n), t)
-tau_wall = form(nu * rho * dutdn * dWall_bot)
-# tau_wall_eval = mesh.comm.allreduce(assemble_scalar(tau_wall), op=MPI.SUM)
-tau_wall_eval_list = mesh.comm.gather(assemble_scalar(tau_wall), root=0)
+tau_wall_bot = form(nu * rho * dutdn * dWall_bot)
+tau_wall_eval_list_bot = mesh.comm.gather(assemble_scalar(tau_wall_bot), root=0)
 
 if rank == 0:
-    tau_wall_eval = sum(tau_wall_eval_list)
-    print(tau_wall_eval_list)
+    tau_wall_eval = sum(tau_wall_eval_list_bot)
     print(tau_wall_eval)
 
 
