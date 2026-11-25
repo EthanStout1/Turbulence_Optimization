@@ -8,6 +8,7 @@ from ufl import (
     grad,
     nabla_grad,
     inner,
+    outer,
     split,
     Identity,
     derivative,
@@ -18,6 +19,7 @@ from ufl import (
     FacetNormal,
     Measure,
     SpatialCoordinate,
+    CellDiameter,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -238,6 +240,7 @@ rho = Constant(mesh, default_scalar_type(rho_ref))
 dt = Constant(mesh, default_scalar_type(dt0))
 n = FacetNormal(mesh)
 
+
 ################ SA Variables
 
 
@@ -305,8 +308,36 @@ L_3 = (
 )  # Diffusive Term
 
 
-L = L_1 + L_2 + L_3 + L_SA  # Steady-state sim
-L_unst = L_1 + L_2 + L_3 + L_0 + L_SA_unst
+################ SUPG Stabilization
+
+# Stabilization parameters
+h = CellDiameter(mesh)
+mag_u = sqrt(inner(u, u) + 1e-12)
+tau_mom_unst = (
+    (2 / dt) * (2 / dt)
+    + (2 * mag_u / h) * (2 * mag_u / h)
+    + (4 * (nu + nu_turb) / (h * h)) * (4 * (nu + nu_turb) / (h * h))
+) ** (-1 / 2)
+tau_mom_st = (
+    (2 * mag_u / h) * (2 * mag_u / h)
+    + (4 * (nu + nu_turb) / (h * h)) * (4 * (nu + nu_turb) / (h * h))
+) ** (-1 / 2)
+
+# Momentum equation strong form residual
+R_mom_strong_st = div(
+    outer(u, u)
+    + (1.0 / rho) * p * iden
+    - (nu + nu_turb) * (grad(u) + grad(u).T - (2.0 / 3.0) * div(u) * iden)
+)
+
+R_mom_strong_unst = ((u - u_1) / dt) + R_mom_strong_st
+
+L_stab_st = inner(R_mom_strong_st, dot(tau_mom_st * grad(v), u)) * dx
+L_stab_unst = inner(R_mom_strong_unst, dot(tau_mom_unst * grad(v), u)) * dx
+
+
+L = L_1 + L_2 + L_3 + L_stab_st + L_SA  # Steady-state sim
+L_unst = L_1 + L_2 + L_3 + L_0 + L_stab_unst + L_SA_unst
 
 
 ################ Set Solver Definition
