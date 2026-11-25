@@ -323,7 +323,17 @@ tau_mom_st = (
     + (4 * (nu + nu_turb) / (h * h)) * (4 * (nu + nu_turb) / (h * h))
 ) ** (-1 / 2)
 
-# Momentum equation strong form residual
+tau_sa_unst = (
+    (2 / dt) * (2 / dt)
+    + (2 * mag_u / h) * (2 * mag_u / h)
+    + (4 * ((nu + nt) / sigma) / (h * h)) * (4 * ((nu + nt) / sigma) / (h * h))
+) ** (-1 / 2)
+tau_sa_st = (
+    (2 * mag_u / h) * (2 * mag_u / h)
+    + (4 * ((nu + nt) / sigma) / (h * h)) * (4 * ((nu + nt) / sigma) / (h * h))
+) ** (-1 / 2)
+
+# Momentum equation strong form residual and stabilization
 R_mom_strong_st = div(
     outer(u, u)
     + (1.0 / rho) * p * iden
@@ -332,12 +342,24 @@ R_mom_strong_st = div(
 
 R_mom_strong_unst = ((u - u_1) / dt) + R_mom_strong_st
 
-L_stab_st = inner(R_mom_strong_st, dot(tau_mom_st * grad(v), u)) * dx
-L_stab_unst = inner(R_mom_strong_unst, dot(tau_mom_unst * grad(v), u)) * dx
+L_mom_stab_st = inner(R_mom_strong_st, dot(tau_mom_st * grad(v), u)) * dx
+L_mom_stab_unst = inner(R_mom_strong_unst, dot(tau_mom_unst * grad(v), u)) * dx
 
+# nu_tilda equation strong form residual and stabilization
+R_nt_strong_st = (
+    dot(u, grad(nt))
+    - cb1 * (1 - ft2) * S_tilda * nt
+    + (cw1 * fw - (cb1 / (kappa * kappa)) * ft2) * (nt / d_) * (nt / d_)
+    - (1 / sigma) * (div((nu + nt) * (grad(nt))) + (cb2 * inner(grad(nt), grad(nt))))
+)
 
-L = L_1 + L_2 + L_3 + L_stab_st + L_SA  # Steady-state sim
-L_unst = L_1 + L_2 + L_3 + L_0 + L_stab_unst + L_SA_unst
+R_nt_strong_unst = R_nt_strong_st + ((nt - nt_1) / dt)
+
+L_nt_stab_st = inner(R_nt_strong_st, dot(tau_sa_st * grad(z), u)) * dx
+L_nt_stab_unst = inner(R_nt_strong_unst, dot(tau_sa_unst * grad(z), u)) * dx
+
+L = L_1 + L_2 + L_3 + L_mom_stab_st + L_SA + L_nt_stab_st  # Steady-state sim
+L_unst = L_1 + L_2 + L_3 + L_0 + L_mom_stab_unst + L_SA_unst + L_nt_stab_unst
 
 
 ################ Set Solver Definition
