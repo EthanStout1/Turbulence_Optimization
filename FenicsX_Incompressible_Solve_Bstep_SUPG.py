@@ -20,6 +20,7 @@ from ufl import (
     Measure,
     SpatialCoordinate,
     CellDiameter,
+    as_vector,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -31,11 +32,12 @@ from dolfinx.fem import (
     DirichletBC,
     functionspace,
     locate_dofs_topological,
+    form,
+    assemble_scalar,
 )
 
-from dolfinx.fem.petsc import LinearProblem
+from dolfinx.fem.petsc import LinearProblem, NonlinearProblem
 
-from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.nls.petsc import NewtonSolver
 from dolfinx.io import XDMFFile, VTXWriter
 from mpi4py import MPI
@@ -365,9 +367,9 @@ L_unst = L_1 + L_2 + L_3 + L_0 + L_mom_stab_unst + L_SA_unst + L_nt_stab_unst
 ################ Set Solver Definition
 petsc_options = {
     "snes_type": "newtonls",
-    "snes_linesearch_type": "secant",
+    # "snes_linesearch_type": "secant",
     "snes_linesearch_type": "bt",
-    # "snes_linesearch_alpha": mu_1,
+    "snes_linesearch_alpha": mu_1,
     "snes_linesearch_order": ls_order,
     "snes_atol": tol,
     "snes_rtol": tol,
@@ -461,6 +463,21 @@ u_, p_, nt_ = (
     up.split()[1].collapse(),
     up.split()[2].collapse(),
 )
+
+################ Compute wall shear stress
+dWall = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall)
+n = FacetNormal(mesh)
+
+t = as_vector((n[1], -n[0]))
+dutdn = dot(dot(grad(u_), n), t)
+tau_wall = form(nu * rho * dutdn * dWall)
+# tau_wall_eval = mesh.comm.allreduce(assemble_scalar(tau_wall), op=MPI.SUM)
+tau_wall_eval_list = mesh.comm.gather(assemble_scalar(tau_wall), root=0)
+
+if rank == 0:
+    tau_wall_eval = sum(tau_wall_eval_list)
+    print(tau_wall_eval_list)
+    print(tau_wall_eval)
 
 
 ########### Print out values

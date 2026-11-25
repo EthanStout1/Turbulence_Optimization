@@ -22,11 +22,11 @@ def create_mesh(mesh, cell_type, prune_z=False):
 
 # if proc == 0:
 # Read in mesh
-msh = meshio.read("backwards_step.msh")
+msh = meshio.read("backwards_step_sep_walls.msh")
 
 # Create and save one file for the mesh, and one file for the facets
 triangle_mesh = create_mesh(msh, "triangle", prune_z=True)
 line_mesh = create_mesh(msh, "line", prune_z=True)
-meshio.write("backwards_step.xdmf", triangle_mesh)
-meshio.write("backwards_step_facets.xdmf", line_mesh)
+meshio.write("backwards_step_sep_walls.xdmf", triangle_mesh)
+meshio.write("backwards_step_sep_walls_facets.xdmf", line_mesh)
 MPI.COMM_WORLD.barrier()

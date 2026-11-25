@@ -33,4 +33,6 @@ Physical Curve("Inlet", 8) = {6};
 //+
 Physical Curve("Outlet", 9) = {4};
 //+
-Physical Curve("Wall", 10) = {5, 1, 3, 2};
+Physical Curve("Walls_other", 10) = {5, 1, 2};
+//+
+Physical Curve("Wall_bot", 11) = {3};
