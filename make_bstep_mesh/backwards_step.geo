@@ -5,7 +5,7 @@ H = 1.0; // Step height
 
 
 // Backwards Step Points
-lc_e = 0.03;
+lc_e = 0.07;
 Point(1) = {0.0, 0.0, 0.0, lc_e};
 Point(2) = {Ls, 0.0, 0.0, lc_e};
 Point(3) = {Ls, -H, 0.0, lc_e};
