@@ -455,7 +455,7 @@ print(
 )
 
 
-################ Time Loop
+################ Get fields
 u_, p_, nt_ = (
     up.split()[0].collapse(),
     up.split()[1].collapse(),
