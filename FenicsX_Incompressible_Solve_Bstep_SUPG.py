@@ -344,8 +344,8 @@ L_unst = L_1 + L_2 + L_3 + L_0 + L_stab_unst + L_SA_unst
 petsc_options = {
     "snes_type": "newtonls",
     "snes_linesearch_type": "secant",
-    # "snes_linesearch_type": "bt",
-    "snes_linesearch_alpha": mu_1,
+    "snes_linesearch_type": "bt",
+    # "snes_linesearch_alpha": mu_1,
     "snes_linesearch_order": ls_order,
     "snes_atol": tol,
     "snes_rtol": tol,
