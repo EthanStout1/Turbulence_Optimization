@@ -21,6 +21,7 @@ from ufl import (
     SpatialCoordinate,
     CellDiameter,
     as_vector,
+    adjoint,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -139,7 +140,11 @@ problem_poiss = LinearProblem(
     a,
     L,
     bcs=BCs_d,
-    petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
+    petsc_options={
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
     petsc_options_prefix="Poisson_distance",
 )
 
@@ -339,6 +344,9 @@ tau_mom_st = (
     + (4 * (nu + nu_turb) / (h * h)) * (4 * (nu + nu_turb) / (h * h))
 ) ** (-1 / 2)
 
+tau_c_st = 0.5 * h * mag_u
+tau_c_unst = 0.5 * h * mag_u
+
 tau_sa_unst = (
     (2 / dt) * (2 / dt)
     + (2 * mag_u / h) * (2 * mag_u / h)
@@ -358,8 +366,14 @@ R_mom_strong_st = div(
 
 R_mom_strong_unst = ((u - u_1) / dt) + R_mom_strong_st
 
-L_mom_stab_st = inner(R_mom_strong_st, dot(tau_mom_st * grad(v), u)) * dx
-L_mom_stab_unst = inner(R_mom_strong_unst, dot(tau_mom_unst * grad(v), u)) * dx
+L_mom_supg_st = inner(R_mom_strong_st, dot(tau_mom_st * grad(v), u)) * dx
+L_mom_supg_unst = inner(R_mom_strong_unst, dot(tau_mom_unst * grad(v), u)) * dx
+
+L_mom_grad_div_st = tau_c_st * div(u) * div(v) * dx
+L_mom_grad_div_unst = tau_c_unst * div(u) * div(v) * dx
+
+L_mom_stab_st = L_mom_supg_st + L_mom_grad_div_st
+L_mom_stab_unst = L_mom_supg_unst + L_mom_grad_div_unst
 
 # nu_tilda equation strong form residual and stabilization
 R_nt_strong_st = (
@@ -481,20 +495,66 @@ u_, p_, nt_ = (
 ################ Compute wall shear stress
 dWall_bot = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_bot)
 
-dWall_other = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_other)
 n = FacetNormal(mesh)
 
 t = as_vector((n[1], -n[0]))
-dutdn = dot(dot(grad(u_), n), t)
-tau_wall_bot = form(nu * rho * dutdn * dWall_bot)
-tau_wall_eval_list_bot = mesh.comm.gather(assemble_scalar(tau_wall_bot), root=0)
+dutdn = dot(dot(grad(u), n), t)
+# tau_wall_bot = form(nu * rho * dutdn * dWall_bot)
+# tau_wall_eval_list_bot = mesh.comm.gather(assemble_scalar(tau_wall_bot), root=0)
 
-if rank == 0:
-    tau_wall_eval = sum(tau_wall_eval_list_bot)
-    print(tau_wall_eval)
+# tau_wall_bot_ufl = nu * rho * dutdn * dWall_bot
+tau_wall_bot_ufl = 0.5 * rho * inner(u, u) * dx
 
+# if rank == 0:
+#    tau_wall_eval = sum(tau_wall_eval_list_bot)
+#    print(tau_wall_eval)
 
-########### Print out values
+################ Compute coarse-space adjoint
+
+# Define adjoint and derivatives
+dRdu_sym = derivative(L, up, du)  # Residual Jacobian
+dRdu_T_sym = adjoint(dRdu_sym)  # Swaps trial and test funcs
+
+dJdu_sym = derivative(tau_wall_bot_ufl, up, vq)
+
+# Define adjoint BCs
+u_in_adj = Function(V_sub)
+u_in_adj.interpolate(noslip)
+bc_inlet_adj = dirichletbc(u_in_adj, in_dofs_v, W.sub(0))
+bc_inlet_nu_adj = dirichletbc(PETSc.ScalarType(0.0), in_dofs_nu, W.sub(2))
+
+bc_wall_other_adj = bc_wall_other
+bc_wall_other_nu_adj = bc_wall_other_nu
+
+bc_wall_bot_adj = bc_wall_bot
+bc_wall_bot_nu_adj = bc_wall_bot_nu
+
+BCs_adj = [
+    bc_inlet_adj,
+    bc_wall_other_adj,
+    bc_wall_bot_adj,
+    bc_inlet_nu_adj,
+    bc_wall_other_nu_adj,
+    bc_wall_bot_nu_adj,
+]
+
+# Solve the adjoint problem
+print("Solving adjoint problem")
+problem_adj = LinearProblem(
+    dRdu_T_sym,
+    -dJdu_sym,
+    bcs=BCs_adj,
+    petsc_options={
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    petsc_options_prefix="Adjoint",
+)
+
+lmbda_ = problem_adj.solve()
+
+########### Write fields
 folder = Path("./tmp")
 folder.mkdir(exist_ok=True, parents=True)
 vtx_u = VTXWriter(
@@ -531,6 +591,38 @@ vtx_u.write(0.0)
 vtx_p.write(0.0)
 vtx_nu.write(0.0)
 vtx_d.write(0.0)
+
+
+# Adjoint
+u_adj_, p_adj_, nt_adj_ = (
+    lmbda_.split()[0].collapse(),
+    lmbda_.split()[1].collapse(),
+    lmbda_.split()[2].collapse(),
+)
+
+vtx_adj_u = VTXWriter(
+    mesh.comm,
+    folder / ("Adjoint_Velocity" + "_.bp"),
+    [u_adj_],
+    engine="BP4",
+)
+vtx_adj_p = VTXWriter(
+    mesh.comm,
+    folder / ("Adjoint_Pressure" + "_.bp"),
+    [p_adj_],
+    engine="BP4",
+)
+
+vtx_adj_nu = VTXWriter(
+    mesh.comm,
+    folder / ("Adjoint_Working_Viscosity" + "_.bp"),
+    [nt_adj_],
+    engine="BP4",
+)
+
+vtx_adj_u.write(0.0)
+vtx_adj_p.write(0.0)
+vtx_adj_nu.write(0.0)
 
 
 quit()
