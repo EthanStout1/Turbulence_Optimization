@@ -22,6 +22,7 @@ from ufl import (
     CellDiameter,
     as_vector,
     adjoint,
+    conditional,
 )
 from basix.ufl import element, mixed_element
 from dolfinx import la, default_scalar_type, log
@@ -55,7 +56,7 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 15000  # Reynolds Number
+Re = 2000  # Reynolds Number
 c_ref = 1.0  # Reference length scale
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
@@ -193,14 +194,14 @@ up.x.scatter_forward()
 
 
 ################ Define Primitive Boundary Conditions
-def inflow(x):
-    return np.stack((np.full(x.shape[1], vel_in), np.zeros(x.shape[1])))
-
-
 # def inflow(x):
-#    eta = (x[1] - 0) / (1)
-#    ux = 6.0 * vel_in * eta * (1.0 - eta)
-#    return np.stack((ux, np.zeros_like(ux)))
+#    return np.stack((np.full(x.shape[1], vel_in), np.zeros(x.shape[1])))
+
+
+def inflow(x):
+    eta = (x[1] - 0) / (1)
+    ux = 6.0 * vel_in * eta * (1.0 - eta)
+    return np.stack((ux, np.zeros_like(ux)))
 
 
 def noslip(x):
@@ -494,16 +495,19 @@ u_, p_, nt_ = (
 
 ################ Compute wall shear stress
 dWall_bot = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_bot)
+dWall_other = Measure("ds", domain=mesh, subdomain_data=fd, subdomain_id=ID_Wall_other)
 
 n = FacetNormal(mesh)
 
-t = as_vector((n[1], -n[0]))
+t_rot_cw = as_vector((n[1], -n[0]))
+t_flag = conditional(t_rot_cw[0] < 0, -1, 1)
+t = t_flag * t_rot_cw
 dutdn = dot(dot(grad(u), n), t)
 # tau_wall_bot = form(nu * rho * dutdn * dWall_bot)
 # tau_wall_eval_list_bot = mesh.comm.gather(assemble_scalar(tau_wall_bot), root=0)
 
-# tau_wall_bot_ufl = nu * rho * dutdn * dWall_bot
-tau_wall_bot_ufl = 0.5 * rho * inner(u, u) * dx
+tau_wall_bot_ufl = nu * rho * dutdn * (dWall_bot + dWall_other)
+# tau_wall_bot_ufl = 0.5 * rho * inner(u, u) * dx
 
 # if rank == 0:
 #    tau_wall_eval = sum(tau_wall_eval_list_bot)
