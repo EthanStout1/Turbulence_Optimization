@@ -56,7 +56,7 @@ K = 1  # Polynomial Degree
 
 
 ################# Set Key Solver Parameters
-Re = 2000  # Reynolds Number
+Re = 5100  # Reynolds Number
 c_ref = 1.0  # Reference length scale
 rho_ref = 1.0  # Reference Density
 vel_ref = 1.0  # Reference Velocity
@@ -84,15 +84,13 @@ mu_1 = 1e-4  # Backtracking line search fac
 
 
 ################# Read in Mesh
-with XDMFFile(
-    MPI.COMM_WORLD, "make_bstep_mesh/backwards_step_sep_walls.xdmf", "r"
-) as xdmf:
+with XDMFFile(MPI.COMM_WORLD, "make_bstep_mesh/moin_backwards_step.xdmf", "r") as xdmf:
     mesh = xdmf.read_mesh(name="Grid")
     cd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 
 with XDMFFile(
-    MPI.COMM_WORLD, "make_bstep_mesh/backwards_step_sep_walls_facets.xdmf", "r"
+    MPI.COMM_WORLD, "make_bstep_mesh/moin_backwards_step_facets.xdmf", "r"
 ) as xdmf:
     fd = xdmf.read_meshtags(mesh, name="Grid")
 mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
@@ -194,14 +192,25 @@ up.x.scatter_forward()
 
 
 ################ Define Primitive Boundary Conditions
+
+
+# Uniform inflow
 # def inflow(x):
 #    return np.stack((np.full(x.shape[1], vel_in), np.zeros(x.shape[1])))
 
 
+# Parabolic inflow
+# def inflow(x):
+#    eta = (x[1] - 0) / (1)
+#    ux = 6.0 * vel_in * eta * (1.0 - eta)
+#    return np.stack((ux, np.zeros_like(ux)))
+
+
+# Turbulent inflow approximation fully developed
 def inflow(x):
-    eta = (x[1] - 0) / (1)
-    ux = 6.0 * vel_in * eta * (1.0 - eta)
-    return np.stack((ux, np.zeros_like(ux)))
+    umax = (8.0 / 7.0) * vel_in
+    vel_in_turb = umax * (1.0 - (x[1] / 5.0)) ** (1 / 7)
+    return np.stack((np.full(x.shape[1], vel_in_turb), np.zeros(x.shape[1])))
 
 
 def noslip(x):
